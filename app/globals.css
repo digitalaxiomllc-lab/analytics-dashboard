@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+/* Light theme overrides */
+.light {
+  color-scheme: light;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    @apply bg-slate-950 text-slate-100 font-sans antialiased;
+  }
+
+  .light body {
+    @apply bg-slate-100 text-slate-900;
+  }
+
+  /* Keyboard focus ring — teal glow, visible only on keyboard nav */
+  :focus-visible {
+    @apply outline-none ring-2 ring-teal-400 ring-offset-2 ring-offset-slate-900 rounded;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { @apply bg-slate-900; }
+  ::-webkit-scrollbar-thumb { @apply bg-slate-700 rounded-full; }
+
+  /* Number spans: always mono */
+  .tabular { font-family: var(--font-ibm-plex-mono), monospace; }
+
+  /* Reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    *, ::before, ::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-slate-800/60 border border-slate-700/60 rounded-xl backdrop-blur-sm;
+  }
+
+  .card-light {
+    @apply bg-white border border-slate-200 rounded-xl;
+  }
+
+  .pill-up {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium
+           bg-emerald-500/10 text-emerald-400 border border-emerald-500/20;
+  }
+
+  .pill-down {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium
+           bg-red-500/10 text-red-400 border border-red-500/20;
+  }
+}
