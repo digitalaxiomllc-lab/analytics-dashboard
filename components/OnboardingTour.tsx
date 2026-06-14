@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { ChevronRight, ExternalLink, ArrowRight, X } from 'lucide-react'
 
-// ── Step definitions ───────────────────────────────────────────────────────────
+// ── Steps ─────────────────────────────────────────────────────────────────────
 interface Step {
   id: string
   target: string | null
@@ -71,58 +71,147 @@ const STEPS: Step[] = [
   },
 ]
 
-// ── Spotlight geometry ─────────────────────────────────────────────────────────
+// ── Geometry ──────────────────────────────────────────────────────────────────
+const CARD_W   = 340
 const SPOT_PAD = 12
+const MARGIN   = 14
+const TOPBAR_H = 68  // 64px sticky header + 4px buffer
 
-interface SpotRect { top: number; left: number; width: number; height: number }
+interface Rect { top: number; left: number; width: number; height: number }
 
-function measureEl(selector: string): SpotRect | null {
-  const el = document.querySelector<HTMLElement>(selector)
+function getRect(sel: string): Rect | null {
+  const el = document.querySelector<HTMLElement>(sel)
   if (!el) return null
   const r = el.getBoundingClientRect()
   return { top: r.top, left: r.left, width: r.width, height: r.height }
 }
 
-// ── Component ──────────────────────────────────────────────────────────────────
+function placeCard(spot: Rect | null, cardH: number): { top: number; left: number } {
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const w  = Math.min(CARD_W, vw - 2 * MARGIN)
+
+  // No target → center the card in the viewport
+  if (!spot) {
+    return {
+      top:  Math.max(TOPBAR_H, (vh - cardH) / 2),
+      left: Math.max(MARGIN, (vw - w) / 2),
+    }
+  }
+
+  // Tall element (e.g. sidebar) → put card to its right if space allows
+  if (spot.height > vh * 0.5) {
+    const rx = spot.left + spot.width + SPOT_PAD + MARGIN
+    if (rx + w < vw - MARGIN) {
+      return { top: Math.max(TOPBAR_H, (vh - cardH) / 2), left: rx }
+    }
+  }
+
+  // Horizontal: center card over the spotlight
+  let left = spot.left + spot.width / 2 - w / 2
+  left = Math.max(MARGIN, Math.min(left, vw - w - MARGIN))
+
+  // Vertical: below the spotlight, or above if no room below
+  const below = spot.top + spot.height + SPOT_PAD + MARGIN
+  if (below + cardH <= vh - MARGIN) return { top: below, left }
+
+  const above = spot.top - SPOT_PAD - MARGIN - cardH
+  if (above >= TOPBAR_H)           return { top: above, left }
+
+  // Last resort: just clear the top bar
+  return { top: TOPBAR_H, left }
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
 interface Props { open: boolean; onClose: () => void; onComplete?: () => void }
 
 export default function OnboardingTour({ open, onClose, onComplete }: Props) {
-  const [step, setStep]   = useState(0)
-  const [spot, setSpot]   = useState<SpotRect | null>(null)
-  const timerRef          = useRef<ReturnType<typeof setTimeout>>()
-  const current           = STEPS[step]
-  const isLast            = step === STEPS.length - 1
+  const [step, setStep]     = useState(0)
+  const [spot, setSpot]     = useState<Rect | null>(null)
+  const [cardPos, setCardPos] = useState({ top: 0, left: 0 })
+  // `ready` gates visibility — false during scroll so the card is hidden
+  // until it's measured in exactly the right place, then fades in.
+  const [ready, setReady]   = useState(false)
+  const cardRef             = useRef<HTMLDivElement>(null)
+  const cancelRef           = useRef<(() => void) | null>(null)
+  const current             = STEPS[step]
+  const isLast              = step === STEPS.length - 1
 
-  const remeasure = useCallback(() => {
-    setSpot(current.target ? measureEl(current.target) : null)
+  // Called once the page has finished scrolling to the target
+  const settle = useCallback(() => {
+    const r = current.target ? getRect(current.target) : null
+    const h = cardRef.current?.offsetHeight ?? 270
+    setSpot(r)
+    // Snap position with no transition, then fade in on the next frame
+    setCardPos(placeCard(r, h))
+    requestAnimationFrame(() => setReady(true))
+  }, [current.target])
+
+  // Repositions without touching ready (used for resize)
+  const reposition = useCallback(() => {
+    const r = current.target ? getRect(current.target) : null
+    const h = cardRef.current?.offsetHeight ?? 270
+    setSpot(r)
+    setCardPos(placeCard(r, h))
   }, [current.target])
 
   useEffect(() => {
     if (!open) return
-    // Scroll target to center, then re-measure once smooth scroll settles
-    const el = current.target ? document.querySelector<HTMLElement>(current.target) : null
-    if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-    else    window.scrollTo({ top: 0, behavior: 'smooth' })
 
-    clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(remeasure, el ? 300 : 60)
+    // Cancel any in-flight scroll listener from a previous step
+    cancelRef.current?.()
 
-    window.addEventListener('resize', remeasure)
-    return () => {
-      clearTimeout(timerRef.current)
-      window.removeEventListener('resize', remeasure)
+    // Hide card + spotlight immediately — card will reappear once scroll settles
+    setReady(false)
+    setSpot(null)
+
+    const el = current.target
+      ? document.querySelector<HTMLElement>(current.target)
+      : null
+
+    if (el) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+
+      let done = false
+      const finish = () => {
+        if (done) return
+        done = true
+        window.removeEventListener('scrollend', finish)
+        clearTimeout(fb)
+        settle()
+      }
+      // `scrollend` fires when the browser finishes its smooth scroll.
+      // The 650ms fallback covers browsers that don't support scrollend yet.
+      window.addEventListener('scrollend', finish, { once: true })
+      const fb = setTimeout(finish, 650)
+
+      cancelRef.current = () => {
+        done = true
+        window.removeEventListener('scrollend', finish)
+        clearTimeout(fb)
+      }
+    } else {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      const t = setTimeout(settle, 80)
+      cancelRef.current = () => clearTimeout(t)
     }
-  }, [open, step, current.target, remeasure])
 
-  // Reset to step 0 every time the tour opens
+    window.addEventListener('resize', reposition)
+    return () => {
+      cancelRef.current?.()
+      window.removeEventListener('resize', reposition)
+    }
+  }, [open, step, current.target, settle, reposition])
+
+  // Always restart from step 0 when tour opens
   useEffect(() => { if (open) setStep(0) }, [open])
 
-  // Keyboard: Esc to close, → to advance
+  // Keyboard nav
   useEffect(() => {
     if (!open) return
     const h = (e: KeyboardEvent) => {
-      if (e.key === 'Escape')      { onClose(); return }
-      if (e.key === 'ArrowRight')  { e.preventDefault(); advance() }
+      if (e.key === 'Escape')     { onClose(); return }
+      if (e.key === 'ArrowRight') { e.preventDefault(); advance() }
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
@@ -140,24 +229,20 @@ export default function OnboardingTour({ open, onClose, onComplete }: Props) {
 
   return (
     <>
-      {/* ── Dark overlay ──────────────────────────────────────────────────────
-          Always present, never intercepts clicks (pointer-events-none).
-          For non-spotlight steps this is the sole darkening layer.
-          For spotlight steps the spotlight box-shadow adds the "hole" on top. */}
+      {/* Full-page dark overlay — for non-spotlight steps only.
+          pointer-events-none: clicks pass through, nothing dismisses the tour. */}
       <div
         aria-hidden="true"
         className="fixed inset-0 z-[900] pointer-events-none"
         style={{
-          background: 'rgba(10,18,35,0.80)',
+          background: 'rgba(10,18,35,0.82)',
           opacity: spot ? 0 : 1,
           transition: 'opacity .25s ease',
         }}
       />
 
-      {/* ── Spotlight ─────────────────────────────────────────────────────────
-          A single div that CSS-transitions its rect to follow the target.
-          box-shadow creates the dark surround; the transparent center is the hole.
-          pointer-events-none so it never blocks interaction with the page. */}
+      {/* Spotlight ring — CSS-transitions to each new target rect.
+          box-shadow creates the dark surround; the transparent center is the hole. */}
       <div
         aria-hidden="true"
         className="fixed z-[901] rounded-xl pointer-events-none"
@@ -171,62 +256,63 @@ export default function OnboardingTour({ open, onClose, onComplete }: Props) {
             '0 0 0 9999px rgba(10,18,35,0.82)',
             '0 0 0 2px #2DD4BF',
             '0 0 0 6px rgba(45,212,191,0.10)',
-            '0 0 40px 8px rgba(45,212,191,0.16)',
+            '0 0 40px 8px rgba(45,212,191,0.15)',
           ].join(', '),
           transition: [
-            `top .35s ${EASE}`,
-            `left .35s ${EASE}`,
-            `width .35s ${EASE}`,
-            `height .35s ${EASE}`,
-            'opacity .2s ease',
+            `top .32s ${EASE}`,
+            `left .32s ${EASE}`,
+            `width .32s ${EASE}`,
+            `height .32s ${EASE}`,
+            'opacity .22s ease',
           ].join(', '),
         }}
       />
 
-      {/* ── Tour card ─────────────────────────────────────────────────────────
-          Fixed to the bottom-right corner — never repositions between steps.
-          This is what makes navigation feel stable and non-jarring. */}
+      {/* Tour card.
+          - Hidden (opacity 0, no transition) until scroll settles and position is correct.
+          - Once ready, fades in at exactly the right place.
+          - On resize, smoothly repositions with CSS transition. */}
       <div
+        ref={cardRef}
         role="dialog"
         aria-modal="true"
         aria-label={`Tour step ${step + 1} of ${STEPS.length}: ${current.title}`}
-        className="
-          fixed z-[902]
-          bottom-6 right-6
-          w-[320px] max-w-[calc(100vw-2rem)]
-          bg-slate-800/95 backdrop-blur-md
-          border border-slate-700/60
-          rounded-2xl shadow-[0_24px_64px_rgba(0,0,0,0.6)]
-          overflow-hidden
-        "
+        className="fixed z-[902] bg-slate-800/95 backdrop-blur-md border border-slate-700/60 rounded-2xl shadow-2xl overflow-hidden"
+        style={{
+          top:      cardPos.top,
+          left:     cardPos.left,
+          width:    CARD_W,
+          maxWidth: 'calc(100vw - 28px)',
+          opacity:  ready ? 1 : 0,
+          // Disable transitions while hidden so position snaps instantly;
+          // enable them once visible so resize repositions feel smooth.
+          transition: ready
+            ? `top .32s ${EASE}, left .32s ${EASE}, opacity .22s ease`
+            : 'none',
+        }}
       >
-        {/* Teal accent line at top */}
+        {/* Teal accent bar */}
         <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-teal-400/0 via-teal-400 to-teal-400/0" />
 
-        {/* Close (×) — only explicit button dismisses the tour */}
+        {/* The only way to close the tour — no backdrop click */}
         <button
           onClick={onClose}
           aria-label="Skip tour"
           title="Skip tour"
-          className="
-            absolute top-3.5 right-3.5 z-10
-            w-7 h-7 flex items-center justify-center rounded-lg
-            text-slate-500 hover:text-slate-300 hover:bg-slate-700/80
-            transition-colors
-          "
+          className="absolute top-3.5 right-3.5 z-10 w-7 h-7 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-700/80 transition-colors"
         >
           <X size={14} />
         </button>
 
-        {/* Content — key={step} makes it fade in fresh on every step */}
+        {/* key={step} gives each step a fresh fade-in of its content only */}
         <div key={step} className="p-5 pt-4 animate-fade-in">
 
-          {/* Progress segments */}
+          {/* Progress bar */}
           <div className="flex items-center gap-1 mb-4 pr-8" aria-hidden="true">
             {STEPS.map((_, i) => (
               <div
                 key={i}
-                className={`h-[3px] rounded-full transition-all duration-400 ${
+                className={`h-[3px] rounded-full transition-all duration-300 ${
                   i === step
                     ? 'flex-[2] bg-teal-400'
                     : i < step
@@ -247,7 +333,6 @@ export default function OnboardingTour({ open, onClose, onComplete }: Props) {
             {current.body}
           </p>
 
-          {/* Optional CTA link (e.g. "Open the calculator", "Get in touch") */}
           {current.cta && (
             <a
               href={current.cta.href}
@@ -267,7 +352,6 @@ export default function OnboardingTour({ open, onClose, onComplete }: Props) {
             </a>
           )}
 
-          {/* Footer nav */}
           <div className="flex items-center justify-between">
             <button
               onClick={onClose}
@@ -275,18 +359,10 @@ export default function OnboardingTour({ open, onClose, onComplete }: Props) {
             >
               Skip tour
             </button>
-
             <button
               onClick={advance}
               autoFocus
-              className="
-                flex items-center gap-1.5
-                px-4 py-2 rounded-xl
-                bg-slate-700 hover:bg-slate-600
-                text-slate-100 text-sm font-medium
-                transition-colors
-                focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:outline-none
-              "
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-100 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:outline-none"
             >
               {isLast ? 'Done' : 'Next'}
               {!isLast && <ChevronRight size={14} />}
