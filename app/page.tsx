@@ -37,6 +37,14 @@ export default function Home() {
     setShowCelebration(true)
   }, [])
 
+  // After the celebration modal auto-dismisses, scroll to the footer contact section
+  const handleCelebrationClose = useCallback(() => {
+    setShowCelebration(false)
+    setTimeout(() => {
+      document.querySelector('footer')?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    }, 350)
+  }, [])
+
   return (
     <>
       <TopBar
@@ -101,7 +109,7 @@ export default function Home() {
       />
       <CelebrationModal
         show={showCelebration}
-        onClose={() => setShowCelebration(false)}
+        onClose={handleCelebrationClose}
       />
     </>
   )

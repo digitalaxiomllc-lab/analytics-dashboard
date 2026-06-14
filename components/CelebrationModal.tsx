@@ -18,7 +18,7 @@ export default function CelebrationModal({ show, onClose }: Props) {
 
     import('canvas-confetti').then(mod => {
       const confetti = mod.default as (opts: object) => void
-      const end = Date.now() + 2600
+      const end = Date.now() + 1200
       const COLORS = ['#2DD4BF', '#818CF8', '#F472B6', '#FB923C', '#34D399', '#60A5FA']
 
       const frame = () => {
@@ -45,6 +45,13 @@ export default function CelebrationModal({ show, onClose }: Props) {
       frame()
     })
   }, [show])
+
+  // Auto-dismiss after 2.2 s so the user doesn't have to click
+  useEffect(() => {
+    if (!show) return
+    const t = setTimeout(onClose, 2200)
+    return () => clearTimeout(t)
+  }, [show, onClose])
 
   // Reset so confetti fires again if tour is re-triggered + completed
   useEffect(() => {

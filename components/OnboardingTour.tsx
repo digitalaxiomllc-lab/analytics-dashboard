@@ -72,8 +72,11 @@ const STEPS: Step[] = [
 ]
 
 // ── Geometry ───────────────────────────────────────────────────────────────────
-const CARD_W  = 344
+const CARD_W   = 344
 const SPOT_PAD = 12
+const MARGIN   = 16
+// Clear the 64px sticky TopBar so the card never hides under it
+const MIN_TOP  = 72
 
 interface SpotRect { top: number; left: number; width: number; height: number }
 
@@ -86,33 +89,35 @@ function measureEl(selector: string | null): SpotRect | null {
 }
 
 function computeCardPos(spot: SpotRect | null, cardH: number): { top: number; left: number } {
-  const M = 16
   const vw = window.innerWidth
   const vh = window.innerHeight
+  // On narrow viewports the card shrinks via maxWidth CSS; keep left calc consistent
+  const effectiveW = Math.min(CARD_W, vw - 2 * MARGIN)
 
   if (!spot) {
     return {
-      top:  Math.max(M, (vh - cardH) / 2),
-      left: Math.max(M, (vw - CARD_W) / 2),
+      top:  Math.max(MIN_TOP, (vh - cardH) / 2),
+      left: Math.max(MARGIN, (vw - effectiveW) / 2),
     }
   }
 
   // Tall target (e.g. sidebar) → place card to the right
   if (spot.height > vh * 0.45) {
-    const rightX = spot.left + spot.width + SPOT_PAD + M
-    if (rightX + CARD_W < vw - M) {
-      return { top: Math.max(M, (vh - cardH) / 2), left: rightX }
+    const rightX = spot.left + spot.width + SPOT_PAD + MARGIN
+    if (rightX + effectiveW < vw - MARGIN) {
+      return { top: Math.max(MIN_TOP, (vh - cardH) / 2), left: rightX }
     }
   }
 
-  // Horizontal: center on element, clamp
-  let left = spot.left + spot.width / 2 - CARD_W / 2
-  left = Math.max(M, Math.min(left, vw - CARD_W - M))
+  // Horizontal: center on element, clamp to viewport edges
+  let left = spot.left + spot.width / 2 - effectiveW / 2
+  left = Math.max(MARGIN, Math.min(left, vw - effectiveW - MARGIN))
 
-  // Vertical: prefer below, else above
-  const belowY = spot.top + spot.height + SPOT_PAD + M
-  if (belowY + cardH < vh - M) return { top: belowY, left }
-  return { top: Math.max(M, spot.top - SPOT_PAD - M - cardH), left }
+  // Vertical: prefer below, else above — never behind the TopBar
+  const belowY = spot.top + spot.height + SPOT_PAD + MARGIN
+  if (belowY + cardH < vh - MARGIN) return { top: belowY, left }
+  const aboveY = spot.top - SPOT_PAD - MARGIN - cardH
+  return { top: Math.max(MIN_TOP, aboveY), left }
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -142,11 +147,12 @@ export default function OnboardingTour({ open, onClose, onComplete }: Props) {
 
   useEffect(() => {
     if (!open) return
-    // Scroll target into view first, then measure after scroll settles
+    // Center the target element in the viewport, then wait for smooth scroll to settle
+    // 450ms covers the typical browser smooth-scroll duration; null-target steps use 60ms
     const el = current.target ? document.querySelector<HTMLElement>(current.target) : null
-    if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' })
     else     window.scrollTo({ top: 0, behavior: 'smooth' })
-    schedule(el ? 140 : 0)
+    schedule(el ? 450 : 60)
     window.addEventListener('resize', remeasure)
     return () => { clearTimeout(timerRef.current); window.removeEventListener('resize', remeasure) }
   }, [open, step, current.target, schedule, remeasure])
@@ -220,9 +226,10 @@ export default function OnboardingTour({ open, onClose, onComplete }: Props) {
         aria-label={`Tour step ${step + 1} of ${STEPS.length}: ${current.title}`}
         className="fixed z-[902] bg-slate-800 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden"
         style={{
-          top:   cardPos.top,
-          left:  cardPos.left,
-          width: CARD_W,
+          top:      cardPos.top,
+          left:     cardPos.left,
+          width:    CARD_W,
+          maxWidth: 'calc(100vw - 2rem)',
           transition: `top .24s ${EASE}, left .24s ${EASE}`,
         }}
         onClick={e => e.stopPropagation()}
