@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronRight, ExternalLink, ArrowRight, X } from 'lucide-react'
 
 interface Step {
@@ -28,7 +28,7 @@ const STEPS: Step[] = [
     id: 'chart',
     target: '[data-tour="revenue-chart"]',
     title: 'Interactive revenue chart',
-    body: 'An area chart overlays actual revenue against your target. Hover any point for the exact figure. The dashed line shows the forecast — clients love seeing trend vs. plan at a glance without opening a spreadsheet.',
+    body: 'An area chart overlays actual revenue against your target. Hover any point for the exact figure. The dashed line shows forecast vs. actuals — clients love this at a glance.',
   },
   {
     id: 'charts-row',
@@ -46,13 +46,13 @@ const STEPS: Step[] = [
     id: 'daterange',
     target: '[data-tour="date-range"]',
     title: 'Instant date filtering',
-    body: 'Switch between Last 7, 30, or 90 days and every chart, KPI, and table updates simultaneously — no page reload. Clients can explore their own data the same way.',
+    body: 'Switch between Last 7, 30, or 90 days and every chart, KPI, and table updates simultaneously — no reload. Clients can explore their data the same way.',
   },
   {
     id: 'sidebar',
     target: '[data-tour="sidebar"]',
     title: 'Modular navigation',
-    body: 'Revenue, Customers, Settings — each tab is its own page with its own data and charts. This architecture scales to dozens of pages without accumulating debt. On mobile, the sidebar collapses to icons automatically.',
+    body: 'Revenue, Customers, Settings — each tab is its own page. This architecture scales to dozens of pages without accumulating debt. On mobile, the sidebar collapses to icons.',
   },
   {
     id: 'calculator',
@@ -70,144 +70,149 @@ const STEPS: Step[] = [
   },
 ]
 
-const CARD_W   = 340
-const PAD      = 12   // spotlight padding around element
-const M        = 14   // screen margin
-const TOPBAR   = 68   // height of sticky header + buffer
+// ── Layout constants ───────────────────────────────────────────────────────────
+const CARD_W  = 340
+const PAD     = 12   // spotlight padding around the target element
+const MARGIN  = 14   // minimum gap to screen edges
+const TOPBAR  = 68   // sticky header height + buffer so card clears it
 
-interface Rect { top: number; left: number; width: number; height: number }
-
-function cardPos(spot: Rect | null, cardH: number): { top: number; left: number } {
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  const w  = Math.min(CARD_W, vw - 2 * M)
-
-  if (!spot) {
-    return { top: Math.max(TOPBAR, (vh - cardH) / 2), left: Math.max(M, (vw - w) / 2) }
-  }
-
-  // Tall element (sidebar) → try right side first
-  if (spot.height > vh * 0.5) {
-    const rx = spot.left + spot.width + PAD + M
-    if (rx + w < vw - M) return { top: Math.max(TOPBAR, (vh - cardH) / 2), left: rx }
-  }
-
-  // Horizontally centered over spotlight, clamped to viewport
-  let left = spot.left + spot.width / 2 - w / 2
-  left = Math.max(M, Math.min(left, vw - w - M))
-
-  const below = spot.top + spot.height + PAD + M
-  if (below + cardH <= vh - M) return { top: below, left }
-
-  const above = spot.top - PAD - M - cardH
-  if (above >= TOPBAR) return { top: above, left }
-
-  return { top: TOPBAR, left }  // last resort: just clear the header
-}
-
-const SHADOW = [
+const BOX_SHADOW = [
   '0 0 0 9999px rgba(10,18,35,0.82)',
   '0 0 0 2px #2DD4BF',
   '0 0 0 6px rgba(45,212,191,0.10)',
   '0 0 40px 8px rgba(45,212,191,0.15)',
 ].join(', ')
 
+interface Rect { top: number; left: number; width: number; height: number }
+
+function measure(sel: string): Rect | null {
+  const el = document.querySelector<HTMLElement>(sel)
+  if (!el) return null
+  const r = el.getBoundingClientRect()
+  return { top: r.top, left: r.left, width: r.width, height: r.height }
+}
+
+// Places the tour card near the spotlight, always within the visible viewport
+function placeCard(spot: Rect | null, cardH: number): { top: number; left: number } {
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const w  = Math.min(CARD_W, vw - 2 * MARGIN)
+
+  // Null target → centered modal
+  if (!spot) {
+    return {
+      top:  Math.max(TOPBAR, (vh - cardH) / 2),
+      left: Math.max(MARGIN, (vw - w) / 2),
+    }
+  }
+
+  // Tall target (sidebar) → try placing card to the right
+  if (spot.height > vh * 0.5) {
+    const rx = spot.left + spot.width + PAD + MARGIN
+    if (rx + w < vw - MARGIN) {
+      return { top: Math.max(TOPBAR, (vh - cardH) / 2), left: rx }
+    }
+  }
+
+  // Horizontally centered over the spotlight
+  let left = spot.left + spot.width / 2 - w / 2
+  left = Math.max(MARGIN, Math.min(left, vw - w - MARGIN))
+
+  // Prefer below; fall back to above; last resort clears the header
+  const below = spot.top + spot.height + PAD + MARGIN
+  if (below + cardH <= vh - MARGIN) return { top: below, left }
+
+  const above = spot.top - PAD - MARGIN - cardH
+  if (above >= TOPBAR) return { top: above, left }
+
+  return { top: TOPBAR, left }
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
 interface Props { open: boolean; onClose: () => void; onComplete?: () => void }
 
 export default function OnboardingTour({ open, onClose, onComplete }: Props) {
   const [step, setStep]   = useState(0)
+  const [spot, setSpot]   = useState<Rect | null>(null)
   const [ready, setReady] = useState(false)
 
-  // Refs for DOM elements whose position is managed outside React
-  const spotRef = useRef<HTMLDivElement>(null)
-  const cardRef = useRef<HTMLDivElement>(null)
-
-  // Mutable refs used inside the rAF loop (avoids stale closures)
+  const cardRef  = useRef<HTMLDivElement>(null)
   const rafId    = useRef(0)
-  const liveRef  = useRef(false)   // true = actively track and show spotlight
-  const stepRef  = useRef(step)
-  stepRef.current = step            // always current — read by rAF without stale closure
+  const current  = STEPS[step]
+  const isLast   = step === STEPS.length - 1
+  const hasTarget = !!current.target
 
-  // ── Initialize DOM-managed styles before first paint ──────────────────────
-  // React never sets top/left/etc on these elements (not in JSX style),
-  // so it will never overwrite what rAF writes to them.
-  useLayoutEffect(() => {
-    const s = spotRef.current
-    const c = cardRef.current
-    if (!s || !c) return
+  // Snapshot the target element's current rect and update state.
+  // React owns ALL style values — no imperative DOM tricks.
+  const snap = () => {
+    if (!current.target) { setSpot(null); return }
+    const r = measure(current.target)
+    setSpot(r)
+  }
 
-    Object.assign(s.style, {
-      position: 'fixed', zIndex: '901', borderRadius: '12px',
-      pointerEvents: 'none', opacity: '0',
-      top: '0', left: '0', width: '0', height: '0',
-      boxShadow: SHADOW,
-      transition: 'opacity .2s ease',
-    })
-
-    // Start off-screen so it never flashes at (0,0) before rAF positions it
-    Object.assign(c.style, {
-      position: 'fixed', zIndex: '902',
-      top: '-9999px', left: '-9999px',
-    })
-  }, [])   // runs once on mount; component unmounts when open=false so this is safe
-
-  // ── rAF tracking loop ─────────────────────────────────────────────────────
-  // Reads getBoundingClientRect() every frame and writes directly to DOM.
-  // No React setState → no re-renders → zero lag even while the user scrolls.
+  // ── Real-time spotlight tracking while a step is active ───────────────────
+  // Fires on scroll and resize (rAF-throttled). Keeps the spotlight ring
+  // locked to the element even as the user scrolls the page.
   useEffect(() => {
-    if (!open) return
+    if (!open || !ready || !current.target) return
 
-    let running = true
-
-    const tick = () => {
-      if (!running) return
-
-      const target = STEPS[stepRef.current].target
-      const s      = spotRef.current
-      const c      = cardRef.current
-
-      if (s && c) {
-        if (target && liveRef.current) {
-          const el = document.querySelector<HTMLElement>(target)
-          if (el) {
-            const r = el.getBoundingClientRect()
-            s.style.top    = `${r.top    - PAD}px`
-            s.style.left   = `${r.left   - PAD}px`
-            s.style.width  = `${r.width  + PAD * 2}px`
-            s.style.height = `${r.height + PAD * 2}px`
-            s.style.opacity = '1'
-
-            const p = cardPos({ top: r.top, left: r.left, width: r.width, height: r.height }, c.offsetHeight)
-            c.style.top  = `${p.top}px`
-            c.style.left = `${p.left}px`
-          }
-        } else if (!target) {
-          // Null-target step: no spotlight, card centered
-          s.style.opacity = '0'
-          const p = cardPos(null, c.offsetHeight)
-          c.style.top  = `${p.top}px`
-          c.style.left = `${p.left}px`
-        }
-        // target + !liveRef: transitioning — spotlight already hidden, leave card off-screen
-      }
-
-      rafId.current = requestAnimationFrame(tick)
+    let pending = false
+    const schedule = () => {
+      if (pending) return
+      pending = true
+      rafId.current = requestAnimationFrame(() => {
+        pending = false
+        snap()
+      })
     }
 
-    rafId.current = requestAnimationFrame(tick)
-    return () => { running = false; cancelAnimationFrame(rafId.current) }
-  }, [open])
+    window.addEventListener('scroll', schedule, { passive: true })
+    window.addEventListener('resize', schedule, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', schedule)
+      window.removeEventListener('resize', schedule)
+      cancelAnimationFrame(rafId.current)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, ready, current.target])
 
-  // ── Step change: hide → scroll → wait for scroll to finish → reveal ───────
+  // ── ResizeObserver: reposition if the element itself resizes ──────────────
+  useEffect(() => {
+    if (!open || !ready || !current.target) return
+    const el = document.querySelector<HTMLElement>(current.target)
+    if (!el) return
+    const obs = new ResizeObserver(() => snap())
+    obs.observe(el)
+    return () => obs.disconnect()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, ready, current.target])
+
+  // ── IntersectionObserver: re-center if element scrolls off-screen ─────────
+  useEffect(() => {
+    if (!open || !current.target) return
+    const el = document.querySelector<HTMLElement>(current.target)
+    if (!el) return
+    const obs = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry.isIntersecting)
+          el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      },
+      { threshold: 0.3 }
+    )
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [open, current.target])
+
+  // ── Step transitions: hide → scroll → scrollend → reveal ──────────────────
   useEffect(() => {
     if (!open) return
 
-    liveRef.current = false
     setReady(false)
-    if (spotRef.current) spotRef.current.style.opacity = '0'
+    setSpot(null)
 
-    const target = STEPS[step].target
-    const el     = target ? document.querySelector<HTMLElement>(target) : null
+    const el = current.target
+      ? document.querySelector<HTMLElement>(current.target)
+      : null
 
     if (el) {
       el.scrollIntoView({ block: 'center', behavior: 'smooth' })
@@ -218,11 +223,12 @@ export default function OnboardingTour({ open, onClose, onComplete }: Props) {
         done = true
         window.removeEventListener('scrollend', reveal)
         clearTimeout(fb)
-        liveRef.current = true
-        // Let rAF write the correct position before React fades the card in
-        requestAnimationFrame(() => requestAnimationFrame(() => setReady(true)))
+        // Measure now that scroll has settled, then show
+        const r = el.getBoundingClientRect()
+        setSpot({ top: r.top, left: r.left, width: r.width, height: r.height })
+        setReady(true)
       }
-      // scrollend fires when smooth scroll truly finishes; 700ms fallback for Safari < 17
+      // scrollend = scroll truly finished (700ms fallback for Safari < 17)
       window.addEventListener('scrollend', reveal, { once: true })
       const fb = setTimeout(reveal, 700)
 
@@ -232,36 +238,19 @@ export default function OnboardingTour({ open, onClose, onComplete }: Props) {
         clearTimeout(fb)
       }
     } else {
+      // Null-target step (welcome, CTA): scroll to top, no spotlight
       window.scrollTo({ top: 0, behavior: 'smooth' })
-      const t = setTimeout(() => requestAnimationFrame(() => setReady(true)), 80)
+      const t = setTimeout(() => { setSpot(null); setReady(true) }, 80)
       return () => clearTimeout(t)
     }
-  }, [open, step])
+  }, [open, step]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── IntersectionObserver: re-center if element scrolls off-screen ─────────
+  // ── Reset to step 0 whenever tour opens ───────────────────────────────────
   useEffect(() => {
-    if (!open || !STEPS[step].target) return
-    const el = document.querySelector<HTMLElement>(STEPS[step].target!)
-    if (!el) return
-
-    const obs = new IntersectionObserver(
-      ([entry]) => {
-        if (!entry.isIntersecting && liveRef.current) {
-          el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-        }
-      },
-      { threshold: 0.3 }
-    )
-    obs.observe(el)
-    return () => obs.disconnect()
-  }, [open, step])
-
-  // ── Reset on open ─────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (open) { setStep(0); setReady(false); liveRef.current = false }
+    if (open) { setStep(0); setReady(false); setSpot(null) }
   }, [open])
 
-  // ── Keyboard ──────────────────────────────────────────────────────────────
+  // ── Keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
     if (!open) return
     const h = (e: KeyboardEvent) => {
@@ -274,124 +263,144 @@ export default function OnboardingTour({ open, onClose, onComplete }: Props) {
   }, [open, step])
 
   function advance() {
-    liveRef.current = false   // hide spotlight immediately on click
-    if (step < STEPS.length - 1) setStep(s => s + 1)
+    if (!isLast) setStep(s => s + 1)
     else { onComplete?.(); onClose() }
   }
 
   if (!open) return null
 
-  const current   = STEPS[step]
-  const isLast    = step === STEPS.length - 1
-  const hasTarget = !!current.target
+  // Derive card position from current spot rect + card's rendered height
+  const pos = placeCard(spot, cardRef.current?.offsetHeight ?? 270)
 
   return (
     <>
-      {/* ── Dark overlay ────────────────────────────────────────────────────
-          Visible on null-target steps and during transitions.
-          When spotlight is live, the spotlight's box-shadow provides the dimming.
-          pointer-events-none: nothing can accidentally close the tour. */}
+      {/* ── Dark overlay ──────────────────────────────────────────────────────
+          Full-viewport fixed layer. Fades out when the spotlight takes over.
+          pointer-events-none: nothing can accidentally dismiss the tour. */}
       <div
         aria-hidden="true"
         className="fixed inset-0 z-[900] pointer-events-none"
         style={{
-          background: 'rgba(10,18,35,0.82)',
-          opacity: (ready && hasTarget) ? 0 : 1,
-          transition: 'opacity .25s ease',
+          background:  'rgba(10,18,35,0.82)',
+          opacity:     ready && hasTarget ? 0 : 1,
+          transition:  'opacity .25s ease',
         }}
       />
 
-      {/* ── Spotlight ───────────────────────────────────────────────────────
-          All styles (position, size, opacity) written by rAF loop.
-          React only provides the DOM node via ref — it owns nothing on this div. */}
-      <div ref={spotRef} aria-hidden="true" />
+      {/* ── Spotlight ring ────────────────────────────────────────────────────
+          React drives top/left/width/height from `spot` state, which is
+          updated by scroll/resize listeners every rAF. The ring tracks the
+          element in real-time. box-shadow creates the surrounding darkening. */}
+      <div
+        aria-hidden="true"
+        className="fixed z-[901] rounded-xl pointer-events-none"
+        style={{
+          top:        (spot?.top    ?? 0) - PAD,
+          left:       (spot?.left   ?? 0) - PAD,
+          width:      (spot?.width  ?? 0) + PAD * 2,
+          height:     (spot?.height ?? 0) + PAD * 2,
+          opacity:    ready && spot ? 1 : 0,
+          boxShadow:  BOX_SHADOW,
+          transition: 'opacity .2s ease',
+          // No position transition — values update every rAF frame,
+          // so movement is already smooth without CSS easing on top.
+        }}
+      />
 
-      {/* ── Card shell ──────────────────────────────────────────────────────
-          Position (top/left) written by rAF loop.
-          React owns: width, maxWidth (constants — never change).
-          Inner div: React owns opacity for the fade-in. */}
+      {/* ── Tour card ─────────────────────────────────────────────────────────
+          position: fixed, positioned by placeCard() near the spotlight.
+          Fades in once scroll has settled and position is correct. */}
       <div
         ref={cardRef}
         role="dialog"
         aria-modal="true"
         aria-label={`Tour step ${step + 1} of ${STEPS.length}: ${current.title}`}
-        style={{ width: CARD_W, maxWidth: 'calc(100vw - 28px)' }}
+        className="fixed z-[902] bg-slate-800/95 backdrop-blur-md border border-slate-700/60 rounded-2xl shadow-2xl overflow-hidden"
+        style={{
+          top:        pos.top,
+          left:       pos.left,
+          width:      CARD_W,
+          maxWidth:   'calc(100vw - 28px)',
+          opacity:    ready ? 1 : 0,
+          transition: 'opacity .2s ease',
+        }}
       >
-        <div
-          className="bg-slate-800/95 backdrop-blur-md border border-slate-700/60 rounded-2xl shadow-2xl overflow-hidden"
-          style={{ opacity: ready ? 1 : 0, transition: 'opacity .2s ease' }}
+        {/* Teal accent line */}
+        <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-teal-400/0 via-teal-400 to-teal-400/0" />
+
+        {/* Only explicit buttons can close — no backdrop click */}
+        <button
+          onClick={onClose}
+          aria-label="Skip tour"
+          title="Skip tour"
+          className="absolute top-3.5 right-3.5 z-10 w-7 h-7 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-700/80 transition-colors"
         >
-          {/* Teal accent line */}
-          <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-teal-400/0 via-teal-400 to-teal-400/0" />
+          <X size={14} />
+        </button>
 
-          {/* Only explicit buttons can close — no backdrop click */}
-          <button
-            onClick={onClose}
-            aria-label="Skip tour"
-            title="Skip tour"
-            className="absolute top-3.5 right-3.5 z-10 w-7 h-7 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-300 hover:bg-slate-700/80 transition-colors"
-          >
-            <X size={14} />
-          </button>
+        {/* key={step} gives each step a fresh fade-in for its content */}
+        <div key={step} className="p-5 pt-4 animate-fade-in">
 
-          <div key={step} className="p-5 pt-4 animate-fade-in">
-            {/* Progress segments */}
-            <div className="flex items-center gap-1 mb-4 pr-8" aria-hidden="true">
-              {STEPS.map((_, i) => (
-                <div
-                  key={i}
-                  className={`h-[3px] rounded-full transition-all duration-300 ${
-                    i === step ? 'flex-[2] bg-teal-400' : i < step ? 'flex-1 bg-teal-600/70' : 'flex-1 bg-slate-700'
-                  }`}
-                />
-              ))}
-              <span className="shrink-0 tabular text-[11px] text-slate-600 ml-1.5 font-mono">
-                {step + 1}/{STEPS.length}
-              </span>
-            </div>
+          {/* Progress segments */}
+          <div className="flex items-center gap-1 mb-4 pr-8" aria-hidden="true">
+            {STEPS.map((_, i) => (
+              <div
+                key={i}
+                className={`h-[3px] rounded-full transition-all duration-300 ${
+                  i === step
+                    ? 'flex-[2] bg-teal-400'
+                    : i < step
+                      ? 'flex-1 bg-teal-600/70'
+                      : 'flex-1 bg-slate-700'
+                }`}
+              />
+            ))}
+            <span className="shrink-0 tabular text-[11px] text-slate-600 ml-1.5 font-mono">
+              {step + 1}/{STEPS.length}
+            </span>
+          </div>
 
-            <h3 className="font-heading font-semibold text-slate-100 text-[15px] leading-snug mb-2">
-              {current.title}
-            </h3>
-            <p className="text-sm text-slate-400 leading-relaxed mb-4">
-              {current.body}
-            </p>
+          <h3 className="font-heading font-semibold text-slate-100 text-[15px] leading-snug mb-2">
+            {current.title}
+          </h3>
+          <p className="text-sm text-slate-400 leading-relaxed mb-4">
+            {current.body}
+          </p>
 
-            {current.cta && (
-              <a
-                href={current.cta.href}
-                {...(current.cta.external ? { target: '_blank', rel: 'noreferrer' } : {})}
-                className={`
-                  flex items-center justify-center gap-2 w-full mb-4
-                  px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors
-                  focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:outline-none
-                  ${current.cta.external
-                    ? 'bg-teal-400 hover:bg-teal-300 text-slate-900'
-                    : 'bg-slate-700/80 hover:bg-slate-700 text-slate-100 border border-teal-400/30 hover:border-teal-400/50'
-                  }
-                `}
-              >
-                {current.cta.label}
-                {current.cta.external ? <ExternalLink size={13} /> : <ArrowRight size={13} />}
-              </a>
-            )}
+          {current.cta && (
+            <a
+              href={current.cta.href}
+              {...(current.cta.external ? { target: '_blank', rel: 'noreferrer' } : {})}
+              className={`
+                flex items-center justify-center gap-2 w-full mb-4
+                px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors
+                focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:outline-none
+                ${current.cta.external
+                  ? 'bg-teal-400 hover:bg-teal-300 text-slate-900'
+                  : 'bg-slate-700/80 hover:bg-slate-700 text-slate-100 border border-teal-400/30 hover:border-teal-400/50'
+                }
+              `}
+            >
+              {current.cta.label}
+              {current.cta.external ? <ExternalLink size={13} /> : <ArrowRight size={13} />}
+            </a>
+          )}
 
-            <div className="flex items-center justify-between">
-              <button
-                onClick={onClose}
-                className="text-[12px] text-slate-600 hover:text-slate-400 transition-colors px-1 py-1"
-              >
-                Skip tour
-              </button>
-              <button
-                onClick={advance}
-                autoFocus
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-100 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:outline-none"
-              >
-                {isLast ? 'Done' : 'Next'}
-                {!isLast && <ChevronRight size={14} />}
-              </button>
-            </div>
+          <div className="flex items-center justify-between">
+            <button
+              onClick={onClose}
+              className="text-[12px] text-slate-600 hover:text-slate-400 transition-colors px-1 py-1"
+            >
+              Skip tour
+            </button>
+            <button
+              onClick={advance}
+              autoFocus
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-100 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:outline-none"
+            >
+              {isLast ? 'Done' : 'Next'}
+              {!isLast && <ChevronRight size={14} />}
+            </button>
           </div>
         </div>
       </div>
