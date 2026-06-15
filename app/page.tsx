@@ -1,59 +1,25 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState } from 'react'
 import TopBar from '@/components/TopBar'
 import RevenueChart from '@/components/RevenueChart'
 import SignupsChart from '@/components/SignupsChart'
 import PlanDonut from '@/components/PlanDonut'
 import TransactionsTable from '@/components/TransactionsTable'
-import OnboardingTour from '@/components/OnboardingTour'
 import HeroStats from '@/components/HeroStats'
-import CelebrationModal from '@/components/CelebrationModal'
 import SortableKPIGrid from '@/components/SortableKPIGrid'
 import SortableSections from '@/components/SortableSections'
 import { getKPIs, type DateRange } from '@/lib/data'
 
-const TOUR_KEY = 'prism_tour_v1_done'
-
 export default function Home() {
-  const [range, setRange]                   = useState<DateRange>(30)
-  const [tourOpen, setTourOpen]             = useState(false)
-  const [showCelebration, setShowCelebration] = useState(false)
+  const [range, setRange] = useState<DateRange>(30)
   const kpis = getKPIs(range)
-
-  useEffect(() => {
-    if (!localStorage.getItem(TOUR_KEY)) {
-      const t = setTimeout(() => setTourOpen(true), 400)
-      return () => clearTimeout(t)
-    }
-  }, [])
-
-  const closeTour = useCallback(() => {
-    setTourOpen(false)
-    localStorage.setItem(TOUR_KEY, '1')
-  }, [])
-
-  const handleTourComplete = useCallback(() => {
-    setShowCelebration(true)
-  }, [])
-
-  // After the celebration modal auto-dismisses, scroll to the footer contact section
-  const handleCelebrationClose = useCallback(() => {
-    setShowCelebration(false)
-    setTimeout(() => {
-      document.querySelector('footer')?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-    }, 350)
-  }, [])
 
   return (
     <>
-      <TopBar
-        range={range}
-        onRangeChange={setRange}
-        onStartTour={() => setTourOpen(true)}
-      />
-
       <HeroStats />
+
+      <TopBar range={range} onRangeChange={setRange} />
 
       <main className="flex-1 p-4 md:p-6 lg:p-8 space-y-5 md:space-y-6">
         <section aria-label="Key performance indicators">
@@ -101,16 +67,6 @@ export default function Home() {
           ]}
         />
       </main>
-
-      <OnboardingTour
-        open={tourOpen}
-        onClose={closeTour}
-        onComplete={handleTourComplete}
-      />
-      <CelebrationModal
-        show={showCelebration}
-        onClose={handleCelebrationClose}
-      />
     </>
   )
 }
